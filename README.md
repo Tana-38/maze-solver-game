@@ -83,13 +83,16 @@ maze-solver-game/
 │   ├── test_solvers.py       # BFS shortest, DFS valid, disconnected graphs
 │   ├── test_properties.py    # Dead ends, bipartite, diameter
 │   └── test_game.py          # Wall collisions, backtracks, scoring
+├── scripts/
+│   ├── demo_generator.py     # ASCII maze + graph stats in the terminal (Role 1)
+│   └── maze_server.py        # Browser maze viewer on localhost (Role 1)
 └── docs/
     └── report_notes.md       # Skeleton for the written report
 ```
 
 ## Installation and Running
 
-Requires **Python 3.10+**.
+Requires **Python 3.10 – 3.13**. pygame has no prebuilt package for Python 3.14 yet, so `pip install` fails there; on Windows, `py -3.11 -m venv .venv` creates the venv with a specific version.
 
 ```bash
 # 1. Create a virtual environment
@@ -112,6 +115,26 @@ python main.py
 # 5. Run the tests (from the project root)
 pytest
 ```
+
+If `pip install` or `git pull` fails with `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate` (common on Windows with antivirus or a campus network), use the Windows certificate store; certificates are still checked:
+
+```bash
+pip install --use-feature=truststore -r requirements.txt
+git -c http.sslBackend=schannel pull
+```
+
+## Notes for Teammates: Using the Maze Module (Role 1)
+
+`src/maze/graph.py` and `src/maze/generator.py` are finished and tested (`pytest tests/test_generator.py`). Things to know when you call them:
+
+- **Grid size:** use `graph.rows` and `graph.cols`. To loop over every cell, use `for r in range(graph.rows): for c in range(graph.cols)` or `graph.to_dict().keys()`.
+- **`graph.has_edge(a, b)` never raises.** It returns `False` for cells outside the grid, so `is_valid_move` can call it directly for a move into the outer wall.
+- **`graph.neighbors(cell)` raises `ValueError`** for a cell outside the grid. It returns a copy, as does `to_dict()`, so changing the result does not change the maze.
+- **`add_edge` / `remove_edge` raise `ValueError`** unless the two cells are in-bounds and orthogonally adjacent. Adding an existing edge or removing a missing one does nothing.
+- **`add_braids(graph, factor, seed=None)`** changes the maze in place and also returns it. Pass the same `seed` as the generator to make a whole level reproducible. Any `factor > 0` opens at least one wall; `DIFFICULTY_LEVELS` braid values can be passed straight in.
+- **`pick_start_and_goal(graph, mode="corners")`** returns `(0, 0)` and `(rows-1, cols-1)`. `mode="diameter"` returns the two ends of the longest path instead, for a harder maze. These are usually not corners.
+- **Generators:** `generate_maze_dfs`, `generate_maze_kruskal` and `generate_maze_prim` all take `(rows, cols, seed=None)` and return a spanning tree. The same seed always gives the same maze.
+- **See it without pygame:** `python scripts/demo_generator.py` prints a maze as ASCII art; `python scripts/maze_server.py` opens a browser viewer at http://127.0.0.1:8000 with a "Run checks" button.
 
 ## Controls
 

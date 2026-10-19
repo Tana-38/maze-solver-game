@@ -20,7 +20,11 @@ Graph = dict[Cell, list[Cell]]   # adjacency list
 class MazeGraph:
     """Undirected graph of maze cells stored as an adjacency list.
 
-    Discrete math concept: Graph Theory — adjacency-list representation,
+    Attributes:
+        rows: Number of grid rows (read-only by convention).
+        cols: Number of grid columns (read-only by convention).
+
+    Concept: Graph Theory — adjacency-list representation,
     vertices = cells, edges = passages.
     """
 
@@ -28,34 +32,44 @@ class MazeGraph:
         """Create a graph with rows * cols vertices and no edges (all walls up).
 
         Args:
-            rows: Number of grid rows.
-            cols: Number of grid columns.
+            rows: Number of grid rows (must be >= 1).
+            cols: Number of grid columns (must be >= 1).
 
         Returns:
             None.
+
+        Raises:
+            ValueError: If rows or cols is less than 1.
 
         Concept: Graph Theory — empty graph on |V| = rows * cols vertices.
         Complexity: O(rows * cols).
         """
-        raise NotImplementedError("TODO: Role 1 — store rows/cols and initialise an empty adjacency list for every cell")
+        if rows < 1 or cols < 1:
+            raise ValueError(f"Grid must be at least 1 x 1, got {rows} x {cols}")
+        self.rows: int = rows
+        self.cols: int = cols
+        # Every cell is a vertex; an empty list means "walls on all four sides".
+        self._adj: Graph = {(r, c): [] for r in range(rows) for c in range(cols)}
 
-    def add_edge(self, a: Cell, b: Cell) -> None:
-        """Open a passage between two adjacent cells (undirected edge).
+    def _in_bounds(self, cell: Cell) -> bool:
+        """Return True if ``cell`` lies inside the rows x cols grid.
 
         Args:
-            a: First cell.
-            b: Second cell; must be a grid neighbor of ``a``.
+            cell: The cell to check.
 
         Returns:
-            None.
+            True if 0 <= row < rows and 0 <= col < cols.
 
-        Concept: Graph Theory — adding edge {a, b} to E (both adjacency lists).
-        Complexity: O(1) amortised (plus O(deg) if checking for duplicates).
+        Concept: Graph Theory — vertex membership test v in V.
+        Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 1 — append b to adj[a] and a to adj[b], rejecting non-adjacent or duplicate edges")
+        r, c = cell
+        return 0 <= r < self.rows and 0 <= c < self.cols
 
-    def remove_edge(self, a: Cell, b: Cell) -> None:
-        """Close the passage between two cells (put the wall back).
+    def _check_adjacent(self, a: Cell, b: Cell) -> None:
+        """Raise ValueError unless a and b are in-bounds, orthogonally adjacent cells.
+
+        Two cells are grid neighbors exactly when their Manhattan distance is 1.
 
         Args:
             a: First cell.
@@ -64,10 +78,65 @@ class MazeGraph:
         Returns:
             None.
 
+        Raises:
+            ValueError: If either cell is outside the grid or they are not adjacent.
+
+        Concept: Graph Theory — {a, b} must be an edge of the grid graph P_m x P_n.
+        Complexity: O(1).
+        """
+        if not self._in_bounds(a) or not self._in_bounds(b):
+            raise ValueError(f"Cell out of bounds for {self.rows} x {self.cols} grid: {a}, {b}")
+        if abs(a[0] - b[0]) + abs(a[1] - b[1]) != 1:
+            raise ValueError(f"Cells {a} and {b} are not orthogonally adjacent")
+
+    def add_edge(self, a: Cell, b: Cell) -> None:
+        """Open a passage between two adjacent cells (undirected edge).
+
+        Adding an edge that already exists does nothing, so the adjacency lists
+        never contain duplicates.
+
+        Args:
+            a: First cell.
+            b: Second cell; must be a grid neighbor of ``a``.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the cells are out of bounds or not orthogonally adjacent.
+
+        Concept: Graph Theory — adding edge {a, b} to E (both adjacency lists).
+        Complexity: O(deg(a)) duplicate check = O(1) since deg <= 4.
+        """
+        self._check_adjacent(a, b)
+        if b in self._adj[a]:
+            return
+        self._adj[a].append(b)
+        self._adj[b].append(a)
+
+    def remove_edge(self, a: Cell, b: Cell) -> None:
+        """Close the passage between two cells (put the wall back).
+
+        Removing an edge that does not exist does nothing.
+
+        Args:
+            a: First cell.
+            b: Second cell; must be a grid neighbor of ``a``.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the cells are out of bounds or not orthogonally adjacent.
+
         Concept: Graph Theory — removing edge {a, b} from E.
         Complexity: O(deg(a) + deg(b)) = O(1) since deg <= 4.
         """
-        raise NotImplementedError("TODO: Role 1 — remove b from adj[a] and a from adj[b]")
+        self._check_adjacent(a, b)
+        if b not in self._adj[a]:
+            return
+        self._adj[a].remove(b)
+        self._adj[b].remove(a)
 
     def neighbors(self, cell: Cell) -> list[Cell]:
         """Return the cells reachable from ``cell`` through an open passage.
@@ -76,15 +145,24 @@ class MazeGraph:
             cell: The vertex whose neighborhood is requested.
 
         Returns:
-            List of adjacent cells N(cell) in the maze graph.
+            A new list of adjacent cells N(cell) in the maze graph; changing it
+            does not change the maze.
+
+        Raises:
+            ValueError: If the cell is outside the grid.
 
         Concept: Graph Theory — open neighborhood N(v) in an adjacency list.
-        Complexity: O(1) to fetch (O(deg(v)) to copy).
+        Complexity: O(deg(v)) to copy = O(1) since deg <= 4.
         """
-        raise NotImplementedError("TODO: Role 1 — return the adjacency list of cell")
+        if not self._in_bounds(cell):
+            raise ValueError(f"Cell {cell} out of bounds for {self.rows} x {self.cols} grid")
+        return list(self._adj[cell])
 
     def has_edge(self, a: Cell, b: Cell) -> bool:
         """Check whether a passage exists between two cells.
+
+        Never raises: cells outside the grid simply have no edges, so the player
+        module can test a move into the outer wall safely.
 
         Args:
             a: First cell.
@@ -96,7 +174,7 @@ class MazeGraph:
         Concept: Graph Theory — edge membership test.
         Complexity: O(deg(a)) = O(1) since deg <= 4.
         """
-        raise NotImplementedError("TODO: Role 1 — return whether b is in adj[a]")
+        return b in self._adj.get(a, [])
 
     def vertex_count(self) -> int:
         """Return |V|, the number of cells.
@@ -110,7 +188,7 @@ class MazeGraph:
         Concept: Graph Theory — order of the graph |V|.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 1 — return the number of vertices")
+        return len(self._adj)
 
     def edge_count(self) -> int:
         """Return |E|, the number of open passages.
@@ -119,12 +197,14 @@ class MazeGraph:
             None.
 
         Returns:
-            Number of undirected edges.
+            Number of undirected edges (each edge counted once).
 
-        Concept: Graph Theory — Handshake Lemma: |E| = (sum of degrees) / 2.
+        Concept: Graph Theory — Handshake Lemma: |E| = (sum of degrees) / 2,
+        because every edge {a, b} appears in both adj[a] and adj[b].
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 1 — sum all degrees and divide by 2 (Handshake Lemma)")
+        degree_sum = sum(len(adjacent) for adjacent in self._adj.values())
+        return degree_sum // 2
 
     def grid_neighbors(self, cell: Cell) -> list[Cell]:
         """Return the up-to-4 orthogonal grid neighbors of ``cell``, bounds-checked.
@@ -135,15 +215,20 @@ class MazeGraph:
             cell: The cell whose grid neighbors are requested.
 
         Returns:
-            List of in-bounds cells at (r-1,c), (r+1,c), (r,c-1), (r,c+1).
+            List of in-bounds cells at (r-1,c), (r+1,c), (r,c-1), (r,c+1), in that order.
 
         Concept: Graph Theory — neighborhood in the rows x cols grid graph P_m x P_n.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 1 — return the in-bounds up/down/left/right cells")
+        r, c = cell
+        candidates = [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]
+        return [n for n in candidates if self._in_bounds(n)]
 
     def to_dict(self) -> Graph:
         """Export the maze as a plain adjacency-list dictionary.
+
+        Both the dict and every neighbor list are copies, so callers cannot
+        mutate the maze through the result.
 
         Args:
             None.
@@ -154,4 +239,21 @@ class MazeGraph:
         Concept: Graph Theory — adjacency-list representation.
         Complexity: O(|V| + |E|).
         """
-        raise NotImplementedError("TODO: Role 1 — return a copy of the adjacency list as a dict")
+        return {cell: list(adjacent) for cell, adjacent in self._adj.items()}
+
+    def __repr__(self) -> str:
+        """Return a short summary such as ``MazeGraph(rows=3, cols=4, V=12, E=11)``.
+
+        Args:
+            None.
+
+        Returns:
+            A string with the grid size and the vertex and edge counts.
+
+        Concept: Graph Theory — order |V| and size |E| of the graph.
+        Complexity: O(|V|) (because of edge_count).
+        """
+        return (
+            f"MazeGraph(rows={self.rows}, cols={self.cols}, "
+            f"V={self.vertex_count()}, E={self.edge_count()})"
+        )
