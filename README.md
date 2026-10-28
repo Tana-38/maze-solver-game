@@ -45,7 +45,7 @@ Each cell of a rectangular grid is a **vertex**, and each open passage between t
 |---|---|---|---|
 | Role 1 — Graph & Maze Generation | [MEMBER 1 NAME] | Graph structure, randomized DFS generator, braid option, Kruskal/Prim | `src/maze/graph.py`, `src/maze/generator.py` |
 | Role 2 — Algorithms & Graph Analysis | [MEMBER 2 NAME] | BFS, DFS, path reconstruction, explored counts, Dijkstra/A*, graph property checks | `src/algorithms/solvers.py`, `src/analysis/properties.py` |
-| Role 3 — Visualization & Animation | [MEMBER 3 NAME] | pygame rendering, path highlighting, search animation, BFS-vs-DFS race | `src/ui/visualizer.py`, `src/ui/animation.py` |
+| Role 3 — Visualization & Animation | Harshali | pygame rendering, path highlighting, search animation, BFS-vs-DFS race | `src/ui/visualizer.py`, `src/ui/animation.py` |
 | Role 4 — Game Logic & Integration | [MEMBER 4 NAME] | Player movement validation, scoring, hints, levels, `main.py` integration | `src/game/player.py`, `src/game/scoring.py`, `main.py` |
 
 ## Project Structure
@@ -82,12 +82,15 @@ maze-solver-game/
 │   ├── test_generator.py     # Maze is a connected tree, seeds, braids
 │   ├── test_solvers.py       # BFS shortest, DFS valid, disconnected graphs
 │   ├── test_properties.py    # Dead ends, bipartite, diameter
-│   └── test_game.py          # Wall collisions, backtracks, scoring
+│   ├── test_game.py          # Wall collisions, backtracks, scoring
+│   └── test_ui.py            # Pixel mapping, wall count, animation, race layout
 ├── scripts/
 │   ├── demo_generator.py     # ASCII maze + graph stats in the terminal (Role 1)
-│   └── maze_server.py        # Browser maze viewer on localhost (Role 1)
+│   ├── maze_server.py        # Browser maze viewer on localhost (Role 1)
+│   └── ui_demo.py            # BFS-vs-DFS race demo in pygame (Role 3)
 └── docs/
-    └── report_notes.md       # Skeleton for the written report
+    ├── report_notes.md       # Skeleton for the written report
+    └── ROLE3_README.md       # How to use the UI module from main.py (Role 3)
 ```
 
 ## Installation and Running
@@ -135,6 +138,10 @@ git -c http.sslBackend=schannel pull
 - **`pick_start_and_goal(graph, mode="corners")`** returns `(0, 0)` and `(rows-1, cols-1)`. `mode="diameter"` returns the two ends of the longest path instead, for a harder maze. These are usually not corners.
 - **Generators:** `generate_maze_dfs`, `generate_maze_kruskal` and `generate_maze_prim` all take `(rows, cols, seed=None)` and return a spanning tree. The same seed always gives the same maze.
 - **See it without pygame:** `python scripts/demo_generator.py` prints a maze as ASCII art; `python scripts/maze_server.py` opens a browser viewer at http://127.0.0.1:8000 with a "Run checks" button.
+
+## Notes for Teammates: Using the UI Module (Role 3)
+
+`src/ui/visualizer.py` and `src/ui/animation.py` are finished and tested (`pytest tests/test_ui.py`). See [docs/ROLE3_README.md](docs/ROLE3_README.md) for the calls `main.py` needs in each mode. The key rule: `step()` advances an animation and `draw()` renders it, so call `step()` in `update_*` and `draw()` in `render_*`. Try it with `python scripts/ui_demo.py`.
 
 ## Controls
 

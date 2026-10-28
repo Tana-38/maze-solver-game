@@ -308,7 +308,7 @@ class MazeApp:
         Concept: BFS.
         Complexity: O(1) per frame.
         """
-        raise NotImplementedError("TODO: Role 4 — step the SearchAnimator")
+        raise NotImplementedError("TODO: Role 4 — call self.animator.step() (advances only; drawing happens in render_solving)")
 
     def update_comparing(self) -> None:
         """Per-frame update of the BFS-vs-DFS race.
@@ -322,7 +322,7 @@ class MazeApp:
         Concept: BFS vs DFS.
         Complexity: O(1) per frame.
         """
-        raise NotImplementedError("TODO: Role 4 — step the SolverRace")
+        raise NotImplementedError("TODO: Role 4 — call self.race.step() (advances only; drawing happens in render_comparing)")
 
     def update_game_over(self) -> None:
         """Per-frame update on the results screen.
@@ -364,7 +364,7 @@ class MazeApp:
         Concept: BFS.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — draw maze then let the animator draw its frame")
+        raise NotImplementedError("TODO: Role 4 — call self.animator.draw() (draws the maze, explored cells, start/goal and path)")
 
     def render_comparing(self) -> None:
         """Draw the race and comparison panel.
@@ -378,7 +378,7 @@ class MazeApp:
         Concept: BFS vs DFS.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — draw maze, race frame, and draw_comparison_panel")
+        raise NotImplementedError("TODO: Role 4 — call self.race.draw(), then renderer.draw_comparison_panel(results) once self.race.done")
 
     def render_game_over(self) -> None:
         """Draw the player's path vs the BFS path and the score.
