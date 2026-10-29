@@ -139,6 +139,16 @@ git -c http.sslBackend=schannel pull
 - **Generators:** `generate_maze_dfs`, `generate_maze_kruskal` and `generate_maze_prim` all take `(rows, cols, seed=None)` and return a spanning tree. The same seed always gives the same maze.
 - **See it without pygame:** `python scripts/demo_generator.py` prints a maze as ASCII art; `python scripts/maze_server.py` opens a browser viewer at http://127.0.0.1:8000 with a "Run checks" button.
 
+## Notes for Teammates: Using the Solvers and Analysis (Role 2)
+
+`src/algorithms/solvers.py` and `src/analysis/properties.py` are finished and tested (`pytest tests/test_solvers.py tests/test_properties.py`).
+
+- **Every solver returns a `SearchResult`:** `path` (`None` if the goal is unreachable), `explored_count`, `explored_order` and `runtime_ms`. `bfs`, `dfs` and `a_star` take `(graph, start, goal)`; `dijkstra` also takes an edge-weight dict, with unlisted edges costing 1.
+- **`explored_order` includes the goal** for BFS, DFS, Dijkstra and A* because each stops as soon as it reaches it, so `explored_count == len(explored_order)`.
+- **`compare_algorithms`** returns `{"bfs": ..., "dfs": ..., "a_star": ...}`. The comparison panel lists whatever names it receives.
+- **`difficulty_score(graph, start, goal)`** returns a float in [0, 1] and raises `ValueError` if the goal is unreachable. The weights are in its docstring.
+- **`degree_distribution`** always has the keys 0 to 4. `count_spanning_trees(rows, cols)` is exact (3 x 3 gives 192) and is meant for small grids.
+
 ## Notes for Teammates: Using the UI Module (Role 3)
 
 `src/ui/visualizer.py` and `src/ui/animation.py` are finished and tested (`pytest tests/test_ui.py`). See [docs/ROLE3_README.md](docs/ROLE3_README.md) for the calls `main.py` needs in each mode. The key rule: `step()` advances an animation and `draw()` renders it, so call `step()` in `update_*` and `draw()` in `render_*`. Try it with `python scripts/ui_demo.py`.
