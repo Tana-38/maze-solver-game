@@ -45,24 +45,36 @@ class Handler(BaseHTTPRequestHandler):
 
     server_version = "MazeSolver/1.0"
 
-    def do_GET(self) -> None:
-        """Route a GET request."""
+    def request_target(self) -> tuple[str, dict[str, str]]:
+        """Return the request's path and query.
+
+        On Vercel, vercel.json rewrites /api/<rest> to /api/index?path=<rest>,
+        so the original path is rebuilt from that parameter.
+        """
         url = urlparse(self.path)
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
-        if url.path.startswith("/api/"):
-            self.dispatch("GET", url.path, query)
+        path = url.path
+        if path.rstrip("/") in ("/api/index", "/api/index.py") and "path" in query:
+            path = "/api/" + query.pop("path").strip("/")
+        return path, query
+
+    def do_GET(self) -> None:
+        """Route a GET request."""
+        path, query = self.request_target()
+        if path.startswith("/api/"):
+            self.dispatch("GET", path, query)
         else:
-            self.send_static(url.path)
+            self.send_static(path)
 
     def do_POST(self) -> None:
         """Route a POST request with an optional JSON body."""
-        url = urlparse(self.path)
+        path, _ = self.request_target()
         try:
             body = self.read_json()
         except api.ApiError as err:
             self.send_json(err.status, {"error": str(err)})
             return
-        self.dispatch("POST", url.path, body)
+        self.dispatch("POST", path, body)
 
     def dispatch(self, method: str, path: str, params: dict[str, Any]) -> None:
         """Call the matching api function and send its result or error as JSON."""
