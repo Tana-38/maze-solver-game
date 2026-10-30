@@ -12,6 +12,14 @@ from dataclasses import dataclass, field
 
 from src.maze.graph import Cell, MazeGraph
 
+# direction name -> (row delta, column delta)
+DIRECTIONS: dict[str, tuple[int, int]] = {
+    "up": (-1, 0),
+    "down": (1, 0),
+    "left": (0, -1),
+    "right": (0, 1),
+}
+
 
 @dataclass
 class PlayerState:
@@ -49,7 +57,10 @@ class PlayerController:
         Concept: Graph Theory — the player performs a walk on G starting at `start`.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — store graph/start/goal and create a PlayerState at start")
+        self.graph = graph
+        self.start = start
+        self.goal = goal
+        self.state = PlayerState(current=start, path=[start])
 
     def try_move(self, direction: str) -> bool:
         """Attempt to move one cell in the given direction.
@@ -63,7 +74,19 @@ class PlayerController:
         Concept: Graph Theory — traversing edge {current, target} only if it exists in E.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — map direction to target cell, validate, update state and backtrack counter")
+        if direction not in DIRECTIONS:
+            raise ValueError(f"Unknown direction {direction!r}")
+        dr, dc = DIRECTIONS[direction]
+        row, col = self.state.current
+        target = (row + dr, col + dc)
+        if not self.is_valid_move(target):
+            return False
+        if self.is_backtrack(target):
+            self.state.backtracks += 1
+        self.state.current = target
+        self.state.path.append(target)
+        self.state.moves += 1
+        return True
 
     def is_valid_move(self, target: Cell) -> bool:
         """Check whether the player may step onto ``target``.
@@ -77,7 +100,7 @@ class PlayerController:
         Concept: Graph Theory — adjacency test in the maze graph.
         Complexity: O(1) (degree <= 4).
         """
-        raise NotImplementedError("TODO: Role 4 — return graph.has_edge(current, target)")
+        return self.graph.has_edge(self.state.current, target)
 
     def is_backtrack(self, target: Cell) -> bool:
         """Check whether moving to ``target`` returns to the previously visited cell.
@@ -91,7 +114,7 @@ class PlayerController:
         Concept: Graph Theory / DFS — backtracking along the last traversed edge.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — compare target with path[-2]")
+        return len(self.state.path) >= 2 and self.state.path[-2] == target
 
     def has_reached_goal(self) -> bool:
         """Check whether the player is standing on the goal cell.
@@ -105,7 +128,7 @@ class PlayerController:
         Concept: Graph Theory — the walk has reached the target vertex.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — return state.current == goal")
+        return self.state.current == self.goal
 
     def request_hint(self, bfs_path: list[Cell]) -> Cell | None:
         """Suggest the next cell to move to and count the hint.
@@ -120,7 +143,8 @@ class PlayerController:
         Concept: BFS — the shortest path gives the optimal next step.
         Complexity: O(1) given the path.
         """
-        raise NotImplementedError("TODO: Role 4 — increment hints_used and return bfs_path[1] if it exists")
+        self.state.hints_used += 1
+        return bfs_path[1] if len(bfs_path) > 1 else None
 
     def reset(self) -> None:
         """Put the player back on the start cell and clear all counters.
@@ -134,4 +158,4 @@ class PlayerController:
         Concept: n/a (state management).
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — replace state with a fresh PlayerState at start")
+        self.state = PlayerState(current=self.start, path=[self.start])

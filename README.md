@@ -38,6 +38,7 @@ Each cell of a rectangular grid is a **vertex**, and each open passage between t
 - **Scoring:** compares your moves with the BFS-optimal path, with penalties for hints and backtracking
 - **Difficulty levels:** easy, medium, and hard settings for grid size and braid (loop) factor
 - **Graph property checks:** connectivity, tree property, bipartiteness, dead ends, and diameter
+- **Web version:** the same game, solvers and analysis in the browser, served by a small Python API (`web/`)
 
 ## Team Members and Roles
 
@@ -46,7 +47,7 @@ Each cell of a rectangular grid is a **vertex**, and each open passage between t
 | Role 1 — Graph & Maze Generation | [MEMBER 1 NAME] | Graph structure, randomized DFS generator, braid option, Kruskal/Prim | `src/maze/graph.py`, `src/maze/generator.py` |
 | Role 2 — Algorithms & Graph Analysis | [MEMBER 2 NAME] | BFS, DFS, path reconstruction, explored counts, Dijkstra/A*, graph property checks | `src/algorithms/solvers.py`, `src/analysis/properties.py` |
 | Role 3 — Visualization & Animation | Harshali | pygame rendering, path highlighting, search animation, BFS-vs-DFS race | `src/ui/visualizer.py`, `src/ui/animation.py` |
-| Role 4 — Game Logic & Integration | [MEMBER 4 NAME] | Player movement validation, scoring, hints, levels, `main.py` integration | `src/game/player.py`, `src/game/scoring.py`, `main.py` |
+| Role 4 — Game Logic & Integration | [MEMBER 4 NAME] | Player movement validation, scoring, hints, levels, `main.py` integration | `src/game/player.py`, `src/game/scoring.py`, `main.py`, `web/` |
 
 ## Project Structure
 
@@ -83,7 +84,12 @@ maze-solver-game/
 │   ├── test_solvers.py       # BFS shortest, DFS valid, disconnected graphs
 │   ├── test_properties.py    # Dead ends, bipartite, diameter
 │   ├── test_game.py          # Wall collisions, backtracks, scoring
-│   └── test_ui.py            # Pixel mapping, wall count, animation, race layout
+│   ├── test_ui.py            # Pixel mapping, wall count, animation, race layout
+│   └── test_api.py           # Web API: moves, scoring, hints, compare, errors
+├── web/
+│   ├── api.py                # JSON API: games, moves, hints, solvers, analysis (Role 4)
+│   ├── server.py             # Standard-library HTTP server for the API and frontend (Role 4)
+│   └── static/               # Frontend: index.html, css/style.css, js/maze.js, js/app.js
 ├── scripts/
 │   ├── demo_generator.py     # ASCII maze + graph stats in the terminal (Role 1)
 │   ├── maze_server.py        # Browser maze viewer on localhost (Role 1)
@@ -115,9 +121,14 @@ pip install -r requirements.txt
 # 4. Run the application
 python main.py
 
-# 5. Run the tests (from the project root)
+# 5. Or run the web version and open http://127.0.0.1:8000
+python web/server.py
+
+# 6. Run the tests (from the project root)
 pytest
 ```
+
+The web version needs no extra packages (it uses only the standard library on the server). The page loads GSAP, ScrollTrigger and Lenis from public CDNs, so the browser needs an internet connection. `python web/server.py --open` also opens the browser for you; `--port 8080` changes the port.
 
 If `pip install` or `git pull` fails with `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate` (common on Windows with antivirus or a campus network), use the Windows certificate store; certificates are still checked:
 
@@ -153,6 +164,16 @@ git -c http.sslBackend=schannel pull
 
 `src/ui/visualizer.py` and `src/ui/animation.py` are finished and tested (`pytest tests/test_ui.py`). See [docs/ROLE3_README.md](docs/ROLE3_README.md) for the calls `main.py` needs in each mode. The key rule: `step()` advances an animation and `draw()` renders it, so call `step()` in `update_*` and `draw()` in `render_*`. Try it with `python scripts/ui_demo.py`.
 
+## Notes for Teammates: Game Logic and Integration (Role 4)
+
+`src/game/player.py`, `src/game/scoring.py`, `main.py` and the web app in `web/` are finished and tested (`pytest tests/test_game.py tests/test_api.py`).
+
+- **`PlayerController(graph, start, goal)`** puts the player on `start`. `try_move("up" | "down" | "left" | "right")` returns `False` for a wall or the outer edge and leaves the state unchanged; an unknown direction raises `ValueError`.
+- **A backtrack** is a move onto `path[-2]`, the cell the player just came from. `path` always starts with `start`, so `len(path) == moves + 1`.
+- **Score** is `optimal_moves / player_moves - 0.05 * hints - 0.01 * backtracks`, clamped to [0, 1]. Ratings: `1.0` Perfect, `>= 0.8` Great, `>= 0.5` Good, otherwise Keep trying. The constants are at the top of `scoring.py`.
+- **`main.py`** menu: `1` / `2` / `3` pick easy, medium or hard (from `DIFFICULTY_LEVELS`), `ENTER` starts. Large grids shrink the cell size so the maze fits the window.
+- **Web API** (`web/api.py`): `POST /api/games` creates a game (`difficulty`, `algorithm`, `mode`, `seed`, and `rows` / `cols` / `braid` for `custom`); `POST /api/games/<id>/move | hint | restart`; `GET /api/games/<id>/solve?algorithm=bfs|dfs|a_star`; `GET /api/games/<id>/compare`; `GET /api/demo`; `GET /api/spanning-trees?rows=&cols=`. The server checks every move with `PlayerController` and scores with `compute_score`, so the browser cannot fake a result. Asking for a solution is recorded and shown on the result card.
+
 ## Controls
 
 | Key | Action |
@@ -163,6 +184,8 @@ git -c http.sslBackend=schannel pull
 | `R` | Generate a new maze |
 | `C` | Open the comparison view (BFS vs DFS) |
 | `ESC` | Return to the menu |
+
+In the browser the arrow keys, `H`, `S` and `R` work while the board is on screen; on a phone, swipe on the maze or use the on-screen pad.
 
 ## Course Information
 

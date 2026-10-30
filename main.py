@@ -2,28 +2,47 @@
 
 Owner: Role 4 — Game Logic & Integration.
 
-The pygame init/quit boilerplate and event loop are real. The window opens on
-a placeholder menu screen; every mode-specific behaviour is a stub.
+The app is a finite state machine (MENU, PLAYING, SOLVING, COMPARING,
+GAME_OVER). Each frame runs handle_events -> update -> render.
 
 Controls (see README): arrow keys move, H hint, S show solution, R new maze,
-C comparison view, ESC back to menu.
+C comparison view, ESC back to menu. In the menu, 1/2/3 pick the difficulty
+and ENTER starts a game.
 """
 
 from __future__ import annotations
 
+import time
 from enum import Enum, auto
 
 import pygame
 
+from src.algorithms.solvers import bfs, compare_algorithms
 from src.config import (
     CELL_SIZE,
+    COLOR_BFS_PATH,
     COLOR_BG,
+    COLOR_HINT,
+    COLOR_PLAYER,
     COLOR_WALL,
+    DIFFICULTY_LEVELS,
     FPS,
     GRID_COLS,
     GRID_ROWS,
     WINDOW_PADDING,
 )
+from src.game.player import PlayerController
+from src.game.scoring import GameResult, compute_score
+from src.maze.generator import add_braids, generate_maze_dfs, pick_start_and_goal
+from src.maze.graph import Cell, MazeGraph
+from src.ui.animation import SearchAnimator, SolverRace
+from src.ui.visualizer import MazeRenderer
+
+DIFFICULTY_KEYS: dict[int, str] = {
+    pygame.K_1: "easy",
+    pygame.K_2: "medium",
+    pygame.K_3: "hard",
+}
 
 ARROW_KEYS: dict[int, str] = {
     pygame.K_UP: "up",
@@ -70,6 +89,22 @@ class MazeApp:
         self.font = pygame.font.SysFont(None, 28)
         self.mode: GameMode = GameMode.MENU
         self.running: bool = True
+        self.difficulty: str = "medium"
+
+        # Per-maze state, filled in by new_level().
+        self.graph: MazeGraph | None = None
+        self.start: Cell = (0, 0)
+        self.goal: Cell = (0, 0)
+        self.controller: PlayerController | None = None
+        self.renderer: MazeRenderer | None = None
+        self.optimal_path: list[Cell] = []
+        self.hint_cell: Cell | None = None
+        self.started_at: float = 0.0
+        self.elapsed: float = 0.0
+        self.animator: SearchAnimator | None = None
+        self.race: SolverRace | None = None
+        self.results: dict = {}
+        self.game_result: GameResult | None = None
 
     def run(self) -> None:
         """Run the main loop until the window is closed.
@@ -111,15 +146,17 @@ class MazeApp:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.mode = GameMode.MENU
+                elif event.key in DIFFICULTY_KEYS and self.mode == GameMode.MENU:
+                    self.difficulty = DIFFICULTY_KEYS[event.key]
                 elif event.key in ARROW_KEYS and self.mode == GameMode.PLAYING:
                     self.on_move(ARROW_KEYS[event.key])
-                elif event.key == pygame.K_h:
+                elif event.key == pygame.K_h and self.mode == GameMode.PLAYING:
                     self.on_hint()
-                elif event.key == pygame.K_s:
+                elif event.key == pygame.K_s and self.graph is not None:
                     self.on_show_solution()
-                elif event.key == pygame.K_r:
+                elif event.key == pygame.K_r and self.mode != GameMode.MENU:
                     self.on_new_maze()
-                elif event.key == pygame.K_c:
+                elif event.key == pygame.K_c and self.graph is not None:
                     self.on_compare()
                 elif event.key == pygame.K_RETURN and self.mode == GameMode.MENU:
                     self.on_start_game()
@@ -161,7 +198,7 @@ class MazeApp:
         """
         self.screen.fill(COLOR_BG)
         if self.mode == GameMode.MENU:
-            self.render_menu_placeholder()
+            self.render_menu()
         elif self.mode == GameMode.PLAYING:
             self.render_playing()
         elif self.mode == GameMode.SOLVING:
@@ -171,8 +208,8 @@ class MazeApp:
         elif self.mode == GameMode.GAME_OVER:
             self.render_game_over()
 
-    def render_menu_placeholder(self) -> None:
-        """Draw a temporary menu screen so the skeleton window is visible.
+    def render_menu(self) -> None:
+        """Draw the menu: title, difficulty choice, and the key reference.
 
         Args:
             None.
@@ -180,17 +217,63 @@ class MazeApp:
         Returns:
             None.
 
-        Concept: n/a (placeholder UI; Role 4 replaces this with the real menu).
+        Concept: n/a (UI).
         Complexity: O(1).
         """
+        rows, cols, _ = DIFFICULTY_LEVELS[self.difficulty]
         lines = [
             "Intelligent Maze Generator and Solver",
-            "ENTER: start game   (not implemented yet)",
+            "",
+            f"Difficulty: {self.difficulty} ({rows} x {cols})",
+            "1 easy   2 medium   3 hard",
+            "",
+            "ENTER  start game",
+            "Arrows  move     H  hint",
+            "S  show solution     C  BFS vs DFS",
+            "R  new maze     ESC  menu",
+            "",
             "Close the window to quit",
         ]
         for i, line in enumerate(lines):
             surface = self.font.render(line, True, COLOR_WALL)
             self.screen.blit(surface, (WINDOW_PADDING, WINDOW_PADDING + i * 36))
+
+    # ------------------------------------------------------------------
+    # Level setup
+    # ------------------------------------------------------------------
+    def new_level(self) -> None:
+        """Generate a maze for the current difficulty and reset all per-maze state.
+
+        The cell size shrinks for large grids so the maze always fits the window.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Concept: Trees — a random spanning tree, optionally braided into a graph with cycles.
+        Complexity: O(|V|).
+        """
+        rows, cols, braid = DIFFICULTY_LEVELS[self.difficulty]
+        seed = time.time_ns() % 1_000_000_007
+        graph = generate_maze_dfs(rows, cols, seed=seed)
+        if braid > 0:
+            add_braids(graph, braid, seed=seed)
+        self.graph = graph
+        self.start, self.goal = pick_start_and_goal(graph)
+        self.controller = PlayerController(graph, self.start, self.goal)
+        width, height = self.screen.get_size()
+        cell_size = min(CELL_SIZE, (width - 2 * WINDOW_PADDING) // cols, (height - 2 * WINDOW_PADDING) // rows)
+        self.renderer = MazeRenderer(self.screen, graph, cell_size)
+        self.optimal_path = bfs(graph, self.start, self.goal).path or []
+        self.hint_cell = None
+        self.started_at = time.perf_counter()
+        self.elapsed = 0.0
+        self.animator = None
+        self.race = None
+        self.results = {}
+        self.game_result = None
 
     # ------------------------------------------------------------------
     # Input actions
@@ -207,7 +290,8 @@ class MazeApp:
         Concept: Trees — generates a spanning-tree maze via generate_maze_dfs.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — generate maze, pick start/goal, create PlayerController and MazeRenderer, start timer")
+        self.new_level()
+        self.mode = GameMode.PLAYING
 
     def on_move(self, direction: str) -> None:
         """Forward an arrow-key move to the PlayerController.
@@ -221,7 +305,13 @@ class MazeApp:
         Concept: Graph Theory — move only along existing edges.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — call controller.try_move and switch to GAME_OVER when the goal is reached")
+        if self.controller is None:
+            return
+        if self.controller.try_move(direction):
+            self.hint_cell = None
+            if self.controller.has_reached_goal():
+                self.elapsed = time.perf_counter() - self.started_at
+                self.mode = GameMode.GAME_OVER
 
     def on_hint(self) -> None:
         """Show the next optimal step (H key).
@@ -235,7 +325,11 @@ class MazeApp:
         Concept: BFS — shortest path from the player's current cell to the goal.
         Complexity: O(|V| + |E|).
         """
-        raise NotImplementedError("TODO: Role 4 — run bfs from player position and call controller.request_hint")
+        if self.controller is None or self.graph is None:
+            return
+        path = bfs(self.graph, self.controller.state.current, self.goal).path
+        if path:
+            self.hint_cell = self.controller.request_hint(path)
 
     def on_show_solution(self) -> None:
         """Reveal the BFS solution with animation (S key).
@@ -249,7 +343,8 @@ class MazeApp:
         Concept: BFS — shortest path in an unweighted graph.
         Complexity: O(|V| + |E|).
         """
-        raise NotImplementedError("TODO: Role 4 — run bfs, create a SearchAnimator, switch to SOLVING")
+        self.animator = SearchAnimator(self.renderer, bfs(self.graph, self.start, self.goal))
+        self.mode = GameMode.SOLVING
 
     def on_new_maze(self) -> None:
         """Generate a fresh maze (R key).
@@ -263,7 +358,8 @@ class MazeApp:
         Concept: Trees — new random spanning tree.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — regenerate the maze and reset player/animations")
+        self.new_level()
+        self.mode = GameMode.PLAYING
 
     def on_compare(self) -> None:
         """Open the BFS-vs-DFS comparison view (C key).
@@ -277,7 +373,9 @@ class MazeApp:
         Concept: BFS vs DFS — explored cells and path length.
         Complexity: O(|V| + |E|).
         """
-        raise NotImplementedError("TODO: Role 4 — call compare_algorithms, create a SolverRace, switch to COMPARING")
+        self.results = compare_algorithms(self.graph, self.start, self.goal)
+        self.race = SolverRace(self.renderer, self.results["bfs"], self.results["dfs"])
+        self.mode = GameMode.COMPARING
 
     # ------------------------------------------------------------------
     # Mode-specific update / render stubs
@@ -294,7 +392,7 @@ class MazeApp:
         Concept: n/a.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — update the timer / check goal")
+        self.elapsed = time.perf_counter() - self.started_at
 
     def update_solving(self) -> None:
         """Per-frame update of the solution animation.
@@ -308,7 +406,8 @@ class MazeApp:
         Concept: BFS.
         Complexity: O(1) per frame.
         """
-        raise NotImplementedError("TODO: Role 4 — call self.animator.step() (advances only; drawing happens in render_solving)")
+        if self.animator is not None:
+            self.animator.step()
 
     def update_comparing(self) -> None:
         """Per-frame update of the BFS-vs-DFS race.
@@ -322,7 +421,8 @@ class MazeApp:
         Concept: BFS vs DFS.
         Complexity: O(1) per frame.
         """
-        raise NotImplementedError("TODO: Role 4 — call self.race.step() (advances only; drawing happens in render_comparing)")
+        if self.race is not None:
+            self.race.step()
 
     def update_game_over(self) -> None:
         """Per-frame update on the results screen.
@@ -336,7 +436,8 @@ class MazeApp:
         Concept: n/a.
         Complexity: O(1).
         """
-        raise NotImplementedError("TODO: Role 4 — compute_score once and hold the GameResult")
+        if self.game_result is None and self.controller is not None:
+            self.game_result = compute_score(self.controller.state, self.optimal_path, self.elapsed)
 
     def render_playing(self) -> None:
         """Draw maze, player, and HUD.
@@ -350,7 +451,17 @@ class MazeApp:
         Concept: n/a.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — call MazeRenderer draw_grid/draw_walls/draw_start_and_goal/draw_player/draw_hud")
+        r, state = self.renderer, self.controller.state
+        r.draw_grid()
+        if self.hint_cell is not None:
+            r.draw_cell(self.hint_cell, COLOR_HINT)
+        r.draw_start_and_goal(self.start, self.goal)
+        r.draw_walls()
+        r.draw_player(state.current)
+        r.draw_hud([
+            f"{self.difficulty.title()}   Moves: {state.moves}   Time: {self.elapsed:.1f} s",
+            f"Hints: {state.hints_used}   Backtracks: {state.backtracks}   H hint  S solve  C compare",
+        ])
 
     def render_solving(self) -> None:
         """Draw the animated solution.
@@ -364,7 +475,12 @@ class MazeApp:
         Concept: BFS.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — call self.animator.draw() (draws the maze, explored cells, start/goal and path)")
+        self.animator.draw()
+        path = self.animator.path
+        self.renderer.draw_hud([
+            f"BFS solution   explored {self.animator.explored_count} cells",
+            f"Shortest path: {len(path) - 1} moves   R new maze   ESC menu" if path else "No path found",
+        ])
 
     def render_comparing(self) -> None:
         """Draw the race and comparison panel.
@@ -378,7 +494,10 @@ class MazeApp:
         Concept: BFS vs DFS.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — call self.race.draw(), then renderer.draw_comparison_panel(results) once self.race.done")
+        self.race.draw()
+        self.renderer.draw_hud(["BFS (left) vs DFS (right)", "R new maze   ESC menu"])
+        if self.race.done:
+            self.renderer.draw_comparison_panel(self.results)
 
     def render_game_over(self) -> None:
         """Draw the player's path vs the BFS path and the score.
@@ -392,7 +511,17 @@ class MazeApp:
         Concept: BFS.
         Complexity: O(|V|).
         """
-        raise NotImplementedError("TODO: Role 4 — overlay player path and BFS path, show GameResult in the HUD")
+        r, result = self.renderer, self.game_result
+        r.draw_grid()
+        r.draw_start_and_goal(self.start, self.goal)
+        r.draw_walls()
+        r.draw_path(self.controller.state.path, COLOR_PLAYER, width=max(2, r.cell_size // 3))
+        r.draw_path(self.optimal_path, COLOR_BFS_PATH, width=max(2, r.cell_size // 6))
+        if result is not None:
+            r.draw_hud([
+                f"{result.rating}!  Score {result.score:.2f}   Moves {result.player_moves} / optimal {result.optimal_moves}",
+                f"Time {result.elapsed_seconds:.1f} s   Hints {result.hints_used}   Backtracks {result.backtracks}   R next",
+            ])
 
 
 def main() -> None:

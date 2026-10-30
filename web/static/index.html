@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maze Solver</title>
+  <meta name="description" content="Generate random mazes as spanning trees, solve them with BFS, DFS and A*, and play them yourself.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Montserrat:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Shared SVG filter for the blue marble surfaces -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <filter id="marble" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.0055 0.013" numOctaves="5" seed="11" result="noise"/>
+        <feColorMatrix in="noise" type="matrix" values="0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0  0 0 0 0 1" result="grey"/>
+        <feComponentTransfer in="grey">
+          <feFuncR type="table" tableValues="0.20 0.28 0.40 0.54 0.70 0.50 0.34 0.25"/>
+          <feFuncG type="table" tableValues="0.30 0.39 0.52 0.66 0.80 0.62 0.46 0.35"/>
+          <feFuncB type="table" tableValues="0.40 0.50 0.63 0.76 0.87 0.73 0.58 0.47"/>
+        </feComponentTransfer>
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- Intro loader -->
+  <div class="loader" id="loader" aria-hidden="true">
+    <div class="loader__frame">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <p class="loader__label">Carving spanning tree</p>
+      <p class="loader__count"><span id="loader-count">0</span>%</p>
+    </div>
+  </div>
+
+  <header class="nav" id="nav">
+    <a class="nav__brand" href="#top" data-scroll>Maze Solver</a>
+    <nav class="nav__links" aria-label="Sections">
+      <a href="#play" data-scroll><span>01</span>Play</a>
+      <a href="#race" data-scroll><span>02</span>Race</a>
+      <a href="#graph" data-scroll><span>03</span>Graph</a>
+      <a href="#method" data-scroll><span>04</span>Method</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero__device" id="hero-device">
+        <div class="device">
+          <div class="device__screen">
+            <svg class="marble" preserveAspectRatio="none" aria-hidden="true"><rect width="100%" height="100%" filter="url(#marble)"/></svg>
+            <div class="device__notch"><span></span></div>
+            <div class="device__content">
+              <p class="device__date" id="hero-date">Friday - 30 October</p>
+              <div class="bracket-frame device__maze">
+                <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+                <canvas id="hero-canvas" aria-label="A maze being solved by breadth first search"></canvas>
+              </div>
+              <p class="device__status">solver : <span id="hero-progress">0</span>%</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero__copy">
+        <h1 class="hero__title" aria-label="Maze Solver">
+          <span class="split-line" data-split>Maze</span>
+          <span class="split-line" data-split>Solver</span>
+        </h1>
+        <blockquote class="bar-quote hero__quote" data-hero-fade>
+          <p>Every maze here is a spanning tree. Watch a graph find its own way out, then try to beat it.</p>
+        </blockquote>
+        <div class="hero__actions" data-hero-fade>
+          <a class="btn btn--solid" href="#play" data-scroll>Play a maze</a>
+          <a class="btn btn--ghost" href="#race" data-scroll>Watch the race</a>
+        </div>
+        <p class="hero__meta mono" data-hero-fade>BFS / DFS / A* / Kruskal / Prim / Matrix-Tree</p>
+      </div>
+      <p class="hero__credit mono">Discrete Mathematics Project</p>
+      <div class="scroll-cue" aria-hidden="true"><span></span></div>
+    </section>
+
+    <!-- PLAY -->
+    <section class="section play" id="play">
+      <div class="section__head">
+        <p class="section__num mono">01</p>
+        <h2 class="section__title" data-split-scroll>Play</h2>
+        <blockquote class="bar-quote" data-reveal>
+          <p>Walk the edges from start to exit. Walls are simply edges the maze never carved. Fewer moves, fewer hints, better score.</p>
+        </blockquote>
+      </div>
+
+      <div class="play__grid">
+        <aside class="panel settings" data-reveal>
+          <div class="field">
+            <p class="field__label">Difficulty</p>
+            <div class="toggle-group" data-group="difficulty">
+              <button class="chip is-active" data-value="easy">Easy<small>10 x 10</small></button>
+              <button class="chip" data-value="medium">Medium<small>20 x 20</small></button>
+              <button class="chip" data-value="hard">Hard<small>30 x 30</small></button>
+              <button class="chip" data-value="custom">Custom<small>you pick</small></button>
+            </div>
+          </div>
+          <div class="field custom-fields" id="custom-fields" hidden>
+            <label class="range"><span>Rows <b id="rows-out">15</b></span><input type="range" id="rows" min="4" max="40" value="15"></label>
+            <label class="range"><span>Columns <b id="cols-out">15</b></span><input type="range" id="cols" min="4" max="40" value="15"></label>
+            <label class="range"><span>Braid <b id="braid-out">0.00</b></span><input type="range" id="braid" min="0" max="0.5" step="0.01" value="0"></label>
+          </div>
+          <div class="field">
+            <p class="field__label">Generator</p>
+            <div class="toggle-group" data-group="algorithm">
+              <button class="chip is-active" data-value="dfs">DFS</button>
+              <button class="chip" data-value="kruskal">Kruskal</button>
+              <button class="chip" data-value="prim">Prim</button>
+            </div>
+          </div>
+          <div class="field">
+            <p class="field__label">Start and exit</p>
+            <div class="toggle-group" data-group="mode">
+              <button class="chip is-active" data-value="corners">Corners</button>
+              <button class="chip" data-value="diameter">Diameter</button>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field__label" for="seed">Seed <span class="muted">(optional)</span></label>
+            <input class="input" id="seed" inputmode="numeric" placeholder="random">
+          </div>
+          <button class="btn btn--solid btn--block" id="generate">Generate maze</button>
+        </aside>
+
+        <div class="board" data-reveal>
+          <div class="board__frame bracket-frame" id="board-frame">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <svg class="marble" preserveAspectRatio="none" aria-hidden="true"><rect width="100%" height="100%" filter="url(#marble)"/></svg>
+            <canvas id="board-canvas" tabindex="0" aria-label="Maze board. Use the arrow keys to move."></canvas>
+            <p class="board__toast mono" id="board-toast" aria-live="polite"></p>
+          </div>
+          <div class="board__actions">
+            <button class="btn btn--ghost" id="hint-btn">Hint <kbd>H</kbd></button>
+            <button class="btn btn--ghost" id="solve-btn">Solve <kbd>S</kbd></button>
+            <button class="btn btn--ghost" id="restart-btn">Restart</button>
+            <button class="btn btn--solid" id="new-btn">New maze <kbd>R</kbd></button>
+          </div>
+          <div class="dpad" aria-label="Move">
+            <button class="dpad__btn up" data-dir="up" aria-label="Up"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7"/></svg></button>
+            <button class="dpad__btn left" data-dir="left" aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+            <button class="dpad__btn right" data-dir="right" aria-label="Right"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+            <button class="dpad__btn down" data-dir="down" aria-label="Down"><svg viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg></button>
+          </div>
+        </div>
+
+        <aside class="panel stats" data-reveal>
+          <div class="stat"><p class="stat__label">Moves</p><p class="stat__value mono" id="s-moves">0</p></div>
+          <div class="stat"><p class="stat__label">Time</p><p class="stat__value mono" id="s-time">0.0s</p></div>
+          <div class="stat"><p class="stat__label">Optimal</p><p class="stat__value mono" id="s-optimal">0</p></div>
+          <div class="stat"><p class="stat__label">To exit</p><p class="stat__value mono" id="s-remaining">0</p></div>
+          <div class="stat"><p class="stat__label">Hints</p><p class="stat__value mono" id="s-hints">0</p></div>
+          <div class="stat"><p class="stat__label">Backtracks</p><p class="stat__value mono" id="s-backtracks">0</p></div>
+          <div class="progress" aria-hidden="true"><span id="s-progress"></span></div>
+          <p class="stats__keys mono">Arrow keys to move<br>H hint / S solve / R new</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- RACE -->
+    <section class="section race" id="race">
+      <div class="section__head">
+        <p class="section__num mono">02</p>
+        <h2 class="section__title" data-split-scroll>Race</h2>
+        <blockquote class="bar-quote" data-reveal>
+          <p>Same maze, three strategies. BFS spreads in layers, DFS dives until it hits a wall, A* leans toward the exit.</p>
+        </blockquote>
+      </div>
+
+      <div class="race__controls" data-reveal>
+        <button class="btn btn--solid" id="race-btn">Run the race</button>
+        <button class="btn btn--ghost" id="race-new-btn">Fresh maze</button>
+        <label class="range range--inline"><span>Speed <b id="speed-out">60</b> cells/s</span><input type="range" id="speed" min="10" max="400" value="60"></label>
+      </div>
+
+      <div class="race__grid">
+        <article class="racer" data-algo="bfs" data-reveal>
+          <header class="racer__head"><h3>BFS</h3><p>Breadth first</p></header>
+          <div class="racer__board bracket-frame">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <svg class="marble" preserveAspectRatio="none" aria-hidden="true"><rect width="100%" height="100%" filter="url(#marble)"/></svg>
+            <canvas></canvas>
+          </div>
+          <dl class="racer__stats mono">
+            <div><dt>Explored</dt><dd data-k="explored">0</dd></div>
+            <div><dt>Path</dt><dd data-k="path">-</dd></div>
+            <div><dt>Runtime</dt><dd data-k="runtime">-</dd></div>
+          </dl>
+        </article>
+        <article class="racer" data-algo="dfs" data-reveal>
+          <header class="racer__head"><h3>DFS</h3><p>Depth first</p></header>
+          <div class="racer__board bracket-frame">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <svg class="marble" preserveAspectRatio="none" aria-hidden="true"><rect width="100%" height="100%" filter="url(#marble)"/></svg>
+            <canvas></canvas>
+          </div>
+          <dl class="racer__stats mono">
+            <div><dt>Explored</dt><dd data-k="explored">0</dd></div>
+            <div><dt>Path</dt><dd data-k="path">-</dd></div>
+            <div><dt>Runtime</dt><dd data-k="runtime">-</dd></div>
+          </dl>
+        </article>
+        <article class="racer" data-algo="a_star" data-reveal>
+          <header class="racer__head"><h3>A*</h3><p>Manhattan heuristic</p></header>
+          <div class="racer__board bracket-frame">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <svg class="marble" preserveAspectRatio="none" aria-hidden="true"><rect width="100%" height="100%" filter="url(#marble)"/></svg>
+            <canvas></canvas>
+          </div>
+          <dl class="racer__stats mono">
+            <div><dt>Explored</dt><dd data-k="explored">0</dd></div>
+            <div><dt>Path</dt><dd data-k="path">-</dd></div>
+            <div><dt>Runtime</dt><dd data-k="runtime">-</dd></div>
+          </dl>
+        </article>
+      </div>
+
+      <div class="race__summary" id="race-summary">
+        <div class="bars" id="race-bars">
+          <div class="bars__row" data-algo="bfs"><span class="bars__name">BFS</span><span class="bars__track"><span class="bars__fill"></span></span><span class="bars__num mono">0</span></div>
+          <div class="bars__row" data-algo="dfs"><span class="bars__name">DFS</span><span class="bars__track"><span class="bars__fill"></span></span><span class="bars__num mono">0</span></div>
+          <div class="bars__row" data-algo="a_star"><span class="bars__name">A*</span><span class="bars__track"><span class="bars__fill"></span></span><span class="bars__num mono">0</span></div>
+        </div>
+        <blockquote class="bar-quote"><p id="race-verdict">Run the race to compare how many cells each search explores before it reaches the exit.</p></blockquote>
+      </div>
+    </section>
+
+    <!-- GRAPH -->
+    <section class="section graph" id="graph">
+      <div class="section__head">
+        <p class="section__num mono">03</p>
+        <h2 class="section__title" data-split-scroll>Graph</h2>
+        <blockquote class="bar-quote" data-reveal>
+          <p>The current maze, read as G = (V, E). Cells are vertices, open passages are edges. These numbers update with every new maze.</p>
+        </blockquote>
+      </div>
+
+      <div class="tiles" id="tiles">
+        <div class="tile" data-reveal><p class="tile__label">Vertices |V|</p><p class="tile__value mono" data-stat="vertices">0</p><p class="tile__note">One per cell</p></div>
+        <div class="tile" data-reveal><p class="tile__label">Edges |E|</p><p class="tile__value mono" data-stat="edges">0</p><p class="tile__note">Open passages</p></div>
+        <div class="tile" data-reveal><p class="tile__label">Degree sum</p><p class="tile__value mono" data-stat="degree_sum">0</p><p class="tile__note">Handshake lemma: equals 2|E|</p></div>
+        <div class="tile" data-reveal><p class="tile__label">Cycles</p><p class="tile__value mono" data-stat="cycles">0</p><p class="tile__note">|E| - |V| + 1, zero for a tree</p></div>
+        <div class="tile" data-reveal><p class="tile__label">Dead ends</p><p class="tile__value mono" data-stat="dead_ends">0</p><p class="tile__note">Vertices of degree 1</p></div>
+        <div class="tile" data-reveal><p class="tile__label">Diameter</p><p class="tile__value mono" data-stat="diameter">0</p><p class="tile__note">Double BFS, exact for a tree</p></div>
+        <div class="tile" data-reveal><p class="tile__label">Difficulty</p><p class="tile__value mono" data-stat="difficulty">0</p><p class="tile__note">Path, dead ends and branching</p></div>
+        <div class="tile tile--checks" data-reveal>
+          <p class="tile__label">Checks</p>
+          <ul class="checks mono">
+            <li><span>Connected</span><b data-check="connected">-</b></li>
+            <li><span>Tree</span><b data-check="is_tree">-</b></li>
+            <li><span>Bipartite</span><b data-check="is_bipartite">-</b></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="graph__lower">
+        <div class="panel degrees" data-reveal>
+          <p class="field__label">Degree distribution</p>
+          <div class="degrees__bars" id="degree-bars"></div>
+          <p class="muted small">Degree 1 is a dead end, degree 3 and 4 are junctions.</p>
+        </div>
+        <div class="panel kirchhoff" data-reveal>
+          <p class="field__label">Matrix-Tree theorem</p>
+          <p class="kirchhoff__lead">How many different perfect mazes fit on a small grid? Kirchhoff counts the spanning trees with a determinant of the Laplacian.</p>
+          <div class="kirchhoff__inputs">
+            <label class="range"><span>Rows <b id="k-rows-out">3</b></span><input type="range" id="k-rows" min="1" max="6" value="3"></label>
+            <label class="range"><span>Columns <b id="k-cols-out">3</b></span><input type="range" id="k-cols" min="1" max="6" value="3"></label>
+          </div>
+          <p class="kirchhoff__count mono" id="k-count">192</p>
+          <p class="muted small">distinct mazes on a <span id="k-size">3 x 3</span> grid</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- METHOD (horizontal pinned scroll on desktop) -->
+    <section class="method" id="method">
+      <div class="method__pin">
+        <div class="method__head">
+          <p class="section__num mono">04</p>
+          <h2 class="section__title" data-split-scroll>Method</h2>
+        </div>
+        <div class="method__track" id="method-track">
+          <article class="step">
+            <p class="step__num mono">i</p>
+            <h3>Generate</h3>
+            <p>Randomized DFS walks to an unvisited neighbor, knocks down the wall between them, and backtracks at dead ends. The carved edges form a spanning tree, so |E| = |V| - 1 and there is exactly one route between any two cells.</p>
+            <p class="step__tag mono">O(|V|)</p>
+          </article>
+          <article class="step">
+            <p class="step__num mono">ii</p>
+            <h3>Braid</h3>
+            <p>Adding any edge to a tree closes exactly one cycle. Higher difficulties remove a few extra walls this way, which creates loops and makes shortest paths matter.</p>
+            <p class="step__tag mono">cycles = |E| - |V| + 1</p>
+          </article>
+          <article class="step">
+            <p class="step__num mono">iii</p>
+            <h3>Solve</h3>
+            <p>BFS explores the graph in layers of equal distance, so the first time it reaches the exit it has a shortest path. Parent pointers rebuild that path backwards from the goal.</p>
+            <p class="step__tag mono">O(|V| + |E|)</p>
+          </article>
+          <article class="step">
+            <p class="step__num mono">iv</p>
+            <h3>Play</h3>
+            <p>Your walk is checked one edge at a time on the server. A move is legal only if the edge exists. Stepping straight back along the last edge counts as a backtrack.</p>
+            <p class="step__tag mono">has_edge(u, v)</p>
+          </article>
+          <article class="step">
+            <p class="step__num mono">v</p>
+            <h3>Score</h3>
+            <p>The BFS path length is a lower bound on any walk to the exit, so optimal moves over your moves is at most 1. Each hint costs 0.05 and each backtrack 0.01.</p>
+            <p class="step__tag mono">score = opt / moves - penalties</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p class="footer__word" aria-hidden="true">Maze Solver</p>
+    <div class="footer__row">
+      <p class="muted">Intelligent Maze Generator and Solver. Discrete Mathematics course project.</p>
+      <a class="btn btn--ghost" href="#top" data-scroll>Back to top</a>
+    </div>
+  </footer>
+
+  <!-- Result modal -->
+  <div class="modal" id="result-modal" role="dialog" aria-modal="true" aria-labelledby="result-rating" hidden>
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__card bracket-frame">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <p class="modal__eyebrow mono">Exit reached</p>
+      <h2 class="modal__rating" id="result-rating">Perfect</h2>
+      <p class="modal__score mono"><span id="result-score">100</span><small>/100</small></p>
+      <dl class="modal__rows mono">
+        <div><dt>Your moves</dt><dd id="r-moves">0</dd></div>
+        <div><dt>Optimal</dt><dd id="r-optimal">0</dd></div>
+        <div><dt>Time</dt><dd id="r-time">0s</dd></div>
+        <div><dt>Hints</dt><dd id="r-hints">0</dd></div>
+        <div><dt>Backtracks</dt><dd id="r-backtracks">0</dd></div>
+      </dl>
+      <p class="modal__note" id="r-note"></p>
+      <div class="modal__actions">
+        <button class="btn btn--solid" id="r-next">Next maze</button>
+        <button class="btn btn--ghost" id="r-replay">Replay</button>
+        <button class="btn btn--ghost" data-close>View paths</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
+  <script src="js/maze.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

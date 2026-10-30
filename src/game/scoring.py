@@ -13,6 +13,16 @@ from dataclasses import dataclass
 from src.game.player import PlayerState
 from src.maze.graph import Cell
 
+HINT_PENALTY: float = 0.05       # subtracted per hint used
+BACKTRACK_PENALTY: float = 0.01  # subtracted per backtracking move
+
+# (minimum score, label), checked from the top
+RATING_THRESHOLDS: list[tuple[float, str]] = [
+    (1.0, "Perfect"),
+    (0.8, "Great"),
+    (0.5, "Good"),
+]
+
 
 @dataclass
 class GameResult:
@@ -53,7 +63,20 @@ def compute_score(player_state: PlayerState, optimal_path: list[Cell], elapsed: 
     start to goal, so the ratio is at most 1.
     Complexity: O(1).
     """
-    raise NotImplementedError("TODO: Role 4 — compute base ratio, subtract hint/backtrack penalties, clamp, attach rating")
+    optimal_moves = max(0, len(optimal_path) - 1)
+    player_moves = player_state.moves
+    base = optimal_moves / player_moves if player_moves else 1.0
+    penalty = HINT_PENALTY * player_state.hints_used + BACKTRACK_PENALTY * player_state.backtracks
+    score = max(0.0, min(1.0, base - penalty))
+    return GameResult(
+        player_moves=player_moves,
+        optimal_moves=optimal_moves,
+        backtracks=player_state.backtracks,
+        hints_used=player_state.hints_used,
+        elapsed_seconds=elapsed,
+        score=score,
+        rating=rating_label(score),
+    )
 
 
 def rating_label(score: float) -> str:
@@ -68,4 +91,7 @@ def rating_label(score: float) -> str:
     Concept: n/a (presentation) — piecewise threshold function.
     Complexity: O(1).
     """
-    raise NotImplementedError("TODO: Role 4 — map score thresholds to rating labels")
+    for threshold, label in RATING_THRESHOLDS:
+        if score >= threshold - 1e-9:
+            return label
+    return "Keep trying"
