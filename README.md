@@ -8,15 +8,12 @@
 
 <br>
 
-[![Live demo](https://img.shields.io/badge/live%20demo-maze--solver--game.vercel.app-f3f3f1?style=for-the-badge&labelColor=151515)](https://maze-solver-game.vercel.app)
-
 ![Python](https://img.shields.io/badge/python-3.10%2B-5f819b?style=flat-square&labelColor=151515)
 ![Tests](https://img.shields.io/badge/tests-123%20passing-a9c3d6?style=flat-square&labelColor=151515)
 ![pygame](https://img.shields.io/badge/desktop-pygame-5f819b?style=flat-square&labelColor=151515)
 ![GSAP](https://img.shields.io/badge/web-GSAP%20%2B%20Lenis-a9c3d6?style=flat-square&labelColor=151515)
-![Vercel](https://img.shields.io/badge/hosted%20on-Vercel-5f819b?style=flat-square&labelColor=151515)
 
-[**Play it**](https://maze-solver-game.vercel.app) &nbsp;/&nbsp; [Run locally](#run-it) &nbsp;/&nbsp; [How it works](#how-it-works) &nbsp;/&nbsp; [The maths](#discrete-mathematics-inside) &nbsp;/&nbsp; [API](#web-api) &nbsp;/&nbsp; [Team](#team)
+[**Run locally**](#run-it) &nbsp;/&nbsp; [How it works](#how-it-works) &nbsp;/&nbsp; [The maths](#discrete-mathematics-inside) &nbsp;/&nbsp; [API](#web-api) &nbsp;/&nbsp; [Team](#team)
 
 </div>
 
