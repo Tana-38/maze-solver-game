@@ -149,3 +149,27 @@ def test_demo_and_spanning_trees() -> None:
     assert api.spanning_trees({"rows": 3, "cols": 3})["count"] == "192"
     with pytest.raises(api.ApiError):
         api.spanning_trees({"rows": 30, "cols": 30})
+
+
+def test_batched_moves_apply_in_order_and_stop_at_goal() -> None:
+    """A list of directions is applied in one request, stopping at the goal."""
+    store = api.TokenStore()
+    game = _new(store)
+    path = store.get(game["id"]).optimal_path
+    dirs = [DIRS[(b[0] - a[0], b[1] - a[1])] for a, b in zip(path, path[1:])]
+    response = api.move(store, game["id"], {"directions": dirs + ["up", "up"]})
+    assert response["applied"] == len(dirs)
+    assert response["result"]["score"] == 1.0
+    assert response["player"]["finished"]
+
+
+def test_batched_moves_stop_at_first_wall() -> None:
+    """Steps after a blocked one are not applied, so the state stays predictable."""
+    store = api.TokenStore()
+    game = _new(store)
+    first = store.get(game["id"]).optimal_path[:2]
+    step = DIRS[(first[1][0] - first[0][0], first[1][1] - first[0][1])]
+    response = api.move(store, game["id"], {"directions": ["up", step]})  # "up" from row 0 is a wall
+    assert response["applied"] == 0 and response["moved"] is False
+    with pytest.raises(api.ApiError):
+        api.move(store, game["id"], {"directions": []})

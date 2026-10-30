@@ -265,6 +265,12 @@
     locked: false,       // true while the solution animation plays
     startedAt: null,
     queue: Promise.resolve(),
+    pending: [],         // moves made locally but not yet sent
+    flushQueued: false,  // a send of the pending moves is already waiting in the chain
+    moves: 0,            // local counters, shown at once; the server's result has the final say
+    backtracks: 0,
+    hints: 0,
+    revealed: false,
     analysis: null,
   };
   const S = {
@@ -304,10 +310,16 @@
     gsap.fromTo(el, { yPercent: 40, opacity: 0.2 }, { yPercent: 0, opacity: 1, duration: 0.35, ease: "power3.out" });
   }
 
-  function updatePlayerStats(player) {
-    setStat(S.moves, player.moves);
-    setStat(S.hints, player.hints_used);
-    setStat(S.backtracks, player.backtracks);
+  function syncCounters(player) {
+    game.moves = player.moves;
+    game.backtracks = player.backtracks;
+    game.hints = player.hints_used;
+    renderCounters();
+  }
+  function renderCounters() {
+    setStat(S.moves, game.moves);
+    setStat(S.hints, game.hints);
+    setStat(S.backtracks, game.backtracks);
   }
 
   function updateRemaining() {
@@ -344,6 +356,9 @@
     game.locked = false;
     game.startedAt = null;
     game.queue = Promise.resolve();
+    game.pending = [];
+    game.flushQueued = false;
+    game.revealed = false;
     game.analysis = data.analysis;
 
     board.setMaze(data.maze);
@@ -354,7 +369,7 @@
     gsap.fromTo(boardFrame, { scale: 0.97 }, { scale: 1, duration: 0.9, ease: "expo.out" });
 
     setStat(S.optimal, data.optimal_moves);
-    updatePlayerStats(data.player);
+    syncCounters(data.player);
     S.time.textContent = "0.0s";
     updateRemaining();
     renderAnalysis(data.analysis, data.maze);
@@ -377,37 +392,117 @@
       gsap.fromTo(boardCanvas, { x: DELTA[dir][1] * 5, y: DELTA[dir][0] * 5 }, { x: 0, y: 0, duration: 0.45, ease: "elastic.out(1, 0.35)" });
       return;
     }
-    // Move optimistically for instant feedback; the server confirms every step.
+    // Move at once for instant feedback; the server checks every step in order.
     if (!game.startedAt) game.startedAt = performance.now();
     game.pos = [game.pos[0] + DELTA[dir][0], game.pos[1] + DELTA[dir][1]];
+    const back = board.trail[board.trail.length - 2];
+    if (back && back[0] === game.pos[0] && back[1] === game.pos[1]) game.backtracks += 1;
+    game.moves += 1;
+    renderCounters();
     board.hint = null;
     board.trail.push(game.pos.slice());
     gsap.to(board.player, { x: game.pos[1], y: game.pos[0], duration: 0.12, ease: "power2.out", overwrite: true });
     updateRemaining();
 
+    game.pending.push(dir);
+    flushMoves();
+    const [gr, gc] = game.maze.goal;
+    if (game.pos[0] === gr && game.pos[1] === gc) finishNow();
+  }
+
+  /* Every request that changes the game runs here, one at a time. Each one
+     starts from the token the previous one returned, so a hint or restart
+     can never overwrite moves (or the other way round). */
+  function exclusive(task) {
     const gen = game.gen;
-    game.queue = game.queue.then(async () => {
-      if (gen !== game.gen) return;
+    game.queue = game.queue
+      .then(() => (gen === game.gen ? task(gen) : undefined))
+      .catch((err) => { if (gen === game.gen) toast(err.message); });
+    return game.queue;
+  }
+
+  /* Sends every queued move in one request. Moves made while that request is
+     in flight are sent together by the next one, so a fast player never
+     builds a backlog of round trips. */
+  function flushMoves() {
+    if (game.flushQueued || !game.pending.length) return;
+    game.flushQueued = true;
+    exclusive(async (gen) => {
+      game.flushQueued = false;
+      const batch = game.pending.splice(0);
+      if (!batch.length) return;
       try {
-        const res = await api(`/api/games/${game.id}/move`, { method: "POST", body: { direction: dir } });
+        const res = await api(`/api/games/${game.id}/move`, { method: "POST", body: { directions: batch } });
         if (gen !== game.gen) return;
         game.id = res.id;
-        updatePlayerStats(res.player);
-        if (!res.moved && !res.player.finished) {
-          const [sr, sc] = res.player.current;  // resync if the server disagreed
-          game.pos = [sr, sc];
-          gsap.to(board.player, { x: sc, y: sr, duration: 0.2 });
-          updateRemaining();
-        }
-        if (res.result) finish(res.result);
-      } catch (err) {
-        toast(err.message);
+        if (res.result) confirmResult(res.result);
+        else if (res.applied < batch.length) resync(res.player);
+      } finally {
+        if (gen === game.gen) flushMoves();
       }
     });
   }
 
-  function finish(result) {
+  /* The server refused a step the browser allowed: trust the server. */
+  function resync(player) {
+    game.pending = [];
+    game.pos = player.current.slice();
+    syncCounters(player);
+    board.trail = [game.pos.slice()];
+    board.paths = [];
+    if (game.finished) {
+      game.finished = false;
+      closeModal(true);
+    }
+    gsap.to(board.player, { x: game.pos[1], y: game.pos[0], duration: 0.2 });
+    updateRemaining();
+    toast("Position restored from the server");
+  }
+
+  // Mirrors src/game/scoring.py so the result shows the moment the exit is reached.
+  const HINT_PENALTY = 0.05;
+  const BACKTRACK_PENALTY = 0.01;
+  function ratingLabel(score) {
+    if (score >= 1 - 1e-9) return "Perfect";
+    if (score >= 0.8 - 1e-9) return "Great";
+    if (score >= 0.5 - 1e-9) return "Good";
+    return "Keep trying";
+  }
+  function localResult() {
+    const base = game.moves ? game.optimal / game.moves : 1;
+    const score = Math.max(0, Math.min(1, base - HINT_PENALTY * game.hints - BACKTRACK_PENALTY * game.backtracks));
+    return {
+      score: Math.round(score * 10000) / 10000,
+      rating: ratingLabel(score),
+      player_moves: game.moves,
+      optimal_moves: game.optimal,
+      backtracks: game.backtracks,
+      hints_used: game.hints,
+      elapsed_seconds: (performance.now() - game.startedAt) / 1000,
+      solution_revealed: game.revealed,
+      player_path: board.trail.slice(),
+      optimal_path: board.shortestPath(game.maze.start, game.maze.goal),
+    };
+  }
+
+  function finishNow() {
     game.finished = true;
+    showResult(localResult());
+  }
+
+  /* The server's scored result replaces the local one (they normally agree). */
+  function confirmResult(result) {
+    if (!game.finished) {
+      game.finished = true;
+      showResult(result);
+      return;
+    }
+    result.elapsed_seconds = game.localElapsed ?? result.elapsed_seconds;  // keep the time the player saw
+    if (!modal.hidden) updateModal(result);
+  }
+
+  function showResult(result) {
+    game.localElapsed = result.elapsed_seconds;
     S.time.textContent = result.elapsed_seconds.toFixed(1) + "s";
     board.trail = null;
     const mine = { cells: result.player_path, progress: 0, color: "rgba(255,255,255,0.55)", width: Math.max(1.5, board.cell * 0.14) };
@@ -415,32 +510,33 @@
     board.paths = [mine, best];
     gsap.timeline()
       .to(mine, { progress: 1, duration: 0.9, ease: "power2.inOut" })
-      .to(best, { progress: 1, duration: 1.1, ease: "power2.inOut" }, 0.3)
-      .add(() => openModal(result), 1.1);
+      .to(best, { progress: 1, duration: 1.1, ease: "power2.inOut" }, 0.3);
+    openModal(result);
   }
 
-  async function hint() {
+  function hint() {
     if (!game.id || game.finished || game.locked) return;
-    await game.queue;
-    const gen = game.gen;
-    try {
+    exclusive(async (gen) => {
       const res = await api(`/api/games/${game.id}/hint`, { method: "POST" });
       if (gen !== game.gen) return;
       game.id = res.id;
-      board.hint = res.hint;
-      updatePlayerStats(res.player);
-      if (res.hint) toast("Hint costs 0.05 of your score");
-    } catch (err) { toast(err.message); }
+      game.hints = res.player.hints_used;
+      renderCounters();
+      // the player may have walked on while the hint was on its way
+      if (res.hint && !game.finished) {
+        board.hint = res.player.current[0] === game.pos[0] && res.player.current[1] === game.pos[1] ? res.hint : null;
+        toast("Hint costs 0.05 of your score");
+      }
+    });
   }
 
-  async function solve() {
+  function solve() {
     if (!game.id || game.locked) return;
-    await game.queue;
-    const gen = game.gen;
-    try {
+    exclusive(async (gen) => {
       const res = await api(`/api/games/${game.id}/solve?algorithm=bfs`);
       if (gen !== game.gen) return;
       game.id = res.id;
+      game.revealed = true;
       game.locked = true;
       board.explored = res.explored_order;
       board.exploredIndex = 0;
@@ -451,15 +547,17 @@
         .to(board, { exploredIndex: res.explored_count, duration: dur, ease: "none" })
         .to(path, { progress: 1, duration: 1.2, ease: "power2.inOut" });
       toast(`BFS explored ${res.explored_count} cells, path ${res.path_length} moves`);
-    } catch (err) { toast(err.message); }
+    });
   }
 
-  async function restart() {
+  function restart() {
     if (!game.id) return;
-    await game.queue;
-    try {
+    exclusive(async (gen) => {
       const res = await api(`/api/games/${game.id}/restart`, { method: "POST" });
+      if (gen !== game.gen) return;
       game.id = res.id;
+      game.pending = [];
+      game.revealed = false;
       closeModal(true);
       game.pos = res.player.current;
       game.finished = false;
@@ -470,10 +568,10 @@
       board.hint = null;
       board.trail = [game.pos.slice()];
       gsap.to(board.player, { x: game.pos[1], y: game.pos[0], duration: 0.5, ease: "expo.out" });
-      updatePlayerStats(res.player);
+      syncCounters(res.player);
       S.time.textContent = "0.0s";
       updateRemaining();
-    } catch (err) { toast(err.message); }
+    });
   }
 
   $("#generate").addEventListener("click", newGame);
@@ -525,7 +623,7 @@
   /* Result modal                                                        */
   /* ------------------------------------------------------------------ */
   const modal = $("#result-modal");
-  function openModal(r) {
+  function fillModal(r) {
     $("#result-rating").textContent = r.rating;
     $("#r-moves").textContent = r.player_moves;
     $("#r-optimal").textContent = r.optimal_moves;
@@ -537,11 +635,27 @@
       : r.player_moves === r.optimal_moves
         ? (r.score === 1 ? "You walked a shortest path." : "A shortest path, but hints and backtracks cost points.")
         : `${r.player_moves - r.optimal_moves} moves more than the shortest path.`;
+  }
+  let shownScore = { v: 0 };
+  function updateModal(r) {
+    if ($("#result-rating").textContent !== r.rating) {
+      fillModal(r);
+      gsap.from(splitChars($("#result-rating")), { yPercent: 100, opacity: 0, duration: 0.6, stagger: 0.03, ease: "expo.out" });
+    } else {
+      const rating = $("#result-rating").innerHTML;
+      fillModal(r);
+      $("#result-rating").innerHTML = rating;
+    }
+    gsap.to(shownScore, { v: r.score * 100, duration: 0.6, ease: "power3.out", overwrite: true, onUpdate: () => { $("#result-score").textContent = Math.round(shownScore.v); } });
+  }
+  function openModal(r) {
+    fillModal(r);
     modal.hidden = false;
     if (lenis) lenis.stop();
-    const score = { v: 0 };
+    shownScore = { v: 0 };
+    const score = shownScore;
     const chars = splitChars($("#result-rating"));
-    gsap.timeline()
+    gsap.timeline({ delay: 0.25 })
       .fromTo(".modal__backdrop", { opacity: 0 }, { opacity: 1, duration: 0.4 })
       .fromTo(".modal__card", { y: 60, opacity: 0, clipPath: "inset(0 0 100% 0)" },
         { y: 0, opacity: 1, clipPath: "inset(0 0 0% 0)", duration: 0.9, ease: "expo.out" }, 0.1)

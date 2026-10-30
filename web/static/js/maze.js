@@ -143,6 +143,28 @@
       return -1;
     }
 
+    /* BFS shortest path as a list of cells, used to draw the result at once. */
+    shortestPath(from, to) {
+      const m = this.maze;
+      const prev = new Map([[from[0] * m.cols + from[1], null]]);
+      const queue = [from];
+      for (let i = 0; i < queue.length; i++) {
+        const cur = queue[i];
+        if (cur[0] === to[0] && cur[1] === to[1]) break;
+        for (const [dir, dr, dc] of [["up", -1, 0], ["down", 1, 0], ["left", 0, -1], ["right", 0, 1]]) {
+          if (!this.canMove(cur, dir)) continue;
+          const next = [cur[0] + dr, cur[1] + dc];
+          const k = next[0] * m.cols + next[1];
+          if (prev.has(k)) continue;
+          prev.set(k, cur);
+          queue.push(next);
+        }
+      }
+      const path = [];
+      for (let cur = to; cur; cur = prev.get(cur[0] * m.cols + cur[1])) path.unshift(cur);
+      return path;
+    }
+
     draw(time = 0) {
       if (!this.maze) return;
       this.time = time;

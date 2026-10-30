@@ -63,6 +63,7 @@ START_MODES = ("corners", "diameter")
 MAX_SIZE = 40              # largest rows/cols a game may use
 MAX_SPANNING_SIZE = 6      # Matrix-Tree determinant is O(|V|^3), keep it small
 MAX_MOVES = 4000           # keeps the token (and the URL it travels in) small
+MAX_BATCH = 400            # most moves accepted in one request
 MOVE_CODES = {"up": "u", "down": "d", "left": "l", "right": "r"}
 CODE_MOVES = {code: name for name, code in MOVE_CODES.items()}
 DEV_SECRET = "maze-solver-dev-secret"  # used when MAZE_SECRET is not set
@@ -330,25 +331,40 @@ def create_game(store: TokenStore, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def move(store: TokenStore, game_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST /api/games/<id>/move: try one step; walls and the outer edge block it.
+    """POST /api/games/<id>/move: apply one step, or a batch of steps, in order.
+
+    The body holds "direction" or "directions" (a list, so a browser that moves
+    faster than the network can send everything queued in one request). Steps
+    stop at the first one blocked by a wall or at the goal. "applied" says how
+    many were taken.
 
     Concept: Graph Theory: the player may only traverse edges of G.
     """
     session = store.get(game_id)
-    direction = _choice(body.get("direction"), "direction", ("up", "down", "left", "right"))
+    directions = body.get("directions", [body.get("direction")])
+    if not isinstance(directions, list) or not 1 <= len(directions) <= MAX_BATCH:
+        raise ApiError(f"directions must be a list of 1 to {MAX_BATCH} moves")
+    for direction in directions:
+        _choice(direction, "direction", ("up", "down", "left", "right"))
     if session.finished_at is not None:
-        return {"id": game_id, "moved": False, "player": _player_json(session)}
-    if len(session.moves) >= MAX_MOVES:
+        return {"id": game_id, "moved": False, "applied": 0, "player": _player_json(session)}
+    if len(session.moves) + len(directions) > MAX_MOVES:
         raise ApiError("too many moves; start a new maze")
-    moved = session.controller.try_move(direction)
-    if moved:
+    applied = 0
+    response: dict[str, Any] = {}
+    for direction in directions:
+        if not session.controller.try_move(direction):
+            break
+        applied += 1
         session.moves.append(direction)
         if session.first_move_at is None:
             session.first_move_at = time.time()
-    response: dict[str, Any] = {"moved": moved}
-    if moved and session.controller.has_reached_goal():
-        session.finished_at = time.time()
-        response["result"] = result_json(session)
+        if session.controller.has_reached_goal():
+            session.finished_at = time.time()
+            response["result"] = result_json(session)
+            break
+    response["moved"] = applied > 0
+    response["applied"] = applied
     response["player"] = _player_json(session)
     response["id"] = store.save(session)
     return response
