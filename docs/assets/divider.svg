@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 28" width="900" height="28" aria-hidden="true">
+<style>
+.w{fill:none;stroke:#8c8c89;stroke-width:2;stroke-dasharray:120 30 60 24;animation:slide 6s linear infinite}
+.r{fill:none;stroke:#a9c3d6;stroke-width:4;stroke-dasharray:70 830;animation:run 4s cubic-bezier(.45,0,.55,1) infinite}
+@keyframes slide{to{stroke-dashoffset:-234}}
+@keyframes run{from{stroke-dashoffset:70}to{stroke-dashoffset:-830}}
+</style>
+<path class="w" d="M0 3H900"/><path class="w" d="M0 25H900" style="animation-direction:reverse"/>
+<path class="r" d="M0 14H900"/>
+</svg>
