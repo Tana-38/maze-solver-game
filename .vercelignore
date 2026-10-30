@@ -1,0 +1,10 @@
+# pygame is only for the desktop app; the web API needs the standard library only.
+requirements.txt
+inspo
+.claude
+tests
+scripts
+docs
+main.py
+.venv
+__pycache__

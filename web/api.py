@@ -7,16 +7,22 @@ src/maze, the solvers and graph checks in src/algorithms and src/analysis, and
 PlayerController / compute_score from src/game. The browser never decides
 whether a move is legal or what the score is; the server does.
 
-Games live in memory in a GameStore, keyed by a random id, so the server keeps
-working with several browser tabs open at once.
+Games are stateless so the API also runs on serverless hosts (Vercel), where
+two requests may reach different processes. The game id is a signed token that
+holds the maze settings (the seed makes the maze reproducible), the moves made
+so far, the hint count and the clock. Each request checks the signature,
+rebuilds the maze, replays the moves through PlayerController, applies the new
+action and returns a fresh token.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import secrets
-import threading
 import time
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -56,7 +62,10 @@ SOLVERS: dict[str, Callable[[MazeGraph, Cell, Cell], SearchResult]] = {
 START_MODES = ("corners", "diameter")
 MAX_SIZE = 40              # largest rows/cols a game may use
 MAX_SPANNING_SIZE = 6      # Matrix-Tree determinant is O(|V|^3), keep it small
-MAX_GAMES = 500            # oldest games are dropped beyond this
+MAX_MOVES = 4000           # keeps the token (and the URL it travels in) small
+MOVE_CODES = {"up": "u", "down": "d", "left": "l", "right": "r"}
+CODE_MOVES = {code: name for name, code in MOVE_CODES.items()}
+DEV_SECRET = "maze-solver-dev-secret"  # used when MAZE_SECRET is not set
 
 
 class ApiError(Exception):
@@ -72,25 +81,25 @@ class GameSession:
     """One maze being played in the browser.
 
     Attributes:
-        id: Random identifier sent to the browser.
         graph: The maze.
         start: Start cell.
         goal: Goal cell.
         controller: Validates moves and tracks the player's walk.
         optimal_path: BFS shortest path from start to goal.
         settings: The options the maze was generated with.
-        first_move_at: perf_counter time of the first move (the clock starts there).
-        finished_at: perf_counter time the goal was reached, or None.
+        moves: Directions of the successful moves, in order.
+        first_move_at: Unix time of the first move (the clock starts there).
+        finished_at: Unix time the goal was reached, or None.
         solution_revealed: True once the browser asked for a solver's path.
     """
 
-    id: str
     graph: MazeGraph
     start: Cell
     goal: Cell
     controller: PlayerController
     optimal_path: list[Cell]
     settings: dict[str, Any] = field(default_factory=dict)
+    moves: list[str] = field(default_factory=list)
     first_move_at: float | None = None
     finished_at: float | None = None
     solution_revealed: bool = False
@@ -99,35 +108,64 @@ class GameSession:
         """Seconds from the first move to the goal (or to now if still playing)."""
         if self.first_move_at is None:
             return 0.0
-        end = self.finished_at if self.finished_at is not None else time.perf_counter()
+        end = self.finished_at if self.finished_at is not None else time.time()
         return end - self.first_move_at
 
 
-class GameStore:
-    """Thread-safe, size-capped map of game id -> GameSession."""
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
-    def __init__(self, limit: int = MAX_GAMES) -> None:
-        self._games: OrderedDict[str, GameSession] = OrderedDict()
-        self._lock = threading.Lock()
-        self._limit = limit
 
-    def add(self, session: GameSession) -> None:
-        """Store a session, dropping the oldest one when full."""
-        with self._lock:
-            self._games[session.id] = session
-            while len(self._games) > self._limit:
-                self._games.popitem(last=False)
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
-    def get(self, game_id: str) -> GameSession:
-        """Return a session or raise a 404 ApiError."""
-        with self._lock:
-            session = self._games.get(game_id)
-        if session is None:
+
+class TokenStore:
+    """Encodes a GameSession as a signed token and rebuilds it from one.
+
+    The token is base64(JSON state) + "." + base64(HMAC-SHA256), so the browser
+    can carry it but cannot change the moves, hints or clock without the server
+    noticing.
+    """
+
+    def __init__(self, secret: str | None = None) -> None:
+        self._key = (secret or DEV_SECRET).encode("utf-8")
+
+    def _sign(self, payload: str) -> str:
+        return _b64(hmac.new(self._key, payload.encode("ascii"), hashlib.sha256).digest()[:18])
+
+    def save(self, session: GameSession) -> str:
+        """Return the token describing the session's current state."""
+        state = {
+            "s": session.settings,
+            "m": "".join(MOVE_CODES[d] for d in session.moves),
+            "h": session.controller.state.hints_used,
+            "r": session.solution_revealed,
+            "t0": session.first_move_at,
+            "t1": session.finished_at,
+        }
+        payload = _b64(json.dumps(state, separators=(",", ":")).encode("utf-8"))
+        return f"{payload}.{self._sign(payload)}"
+
+    def get(self, token: str) -> GameSession:
+        """Verify a token and replay it into a GameSession, or raise a 404 ApiError."""
+        payload, _, signature = token.partition(".")
+        if not signature or not hmac.compare_digest(signature, self._sign(payload)):
             raise ApiError("game not found; start a new maze", 404)
+        try:
+            state = json.loads(_unb64(payload))
+            session = new_session(state["s"])
+            for code in state["m"]:
+                if not session.controller.try_move(CODE_MOVES[code]):
+                    raise ValueError("move through a wall")
+                session.moves.append(CODE_MOVES[code])
+        except (ValueError, KeyError, TypeError):
+            raise ApiError("game not found; start a new maze", 404) from None
+        session.controller.state.hints_used = int(state["h"])
+        session.solution_revealed = bool(state["r"])
+        session.first_move_at = state["t0"]
+        session.finished_at = state["t1"]
         return session
-
-    def __len__(self) -> int:
-        return len(self._games)
 
 
 # ---------------------------------------------------------------------------
@@ -264,32 +302,34 @@ def build_maze(settings: dict[str, Any]) -> tuple[MazeGraph, Cell, Cell]:
 # ---------------------------------------------------------------------------
 # Endpoints (called by web/server.py)
 # ---------------------------------------------------------------------------
-def create_game(store: GameStore, body: dict[str, Any]) -> dict[str, Any]:
-    """POST /api/games: generate a maze and start a game on it."""
-    settings = parse_settings(body)
+def new_session(settings: dict[str, Any]) -> GameSession:
+    """Build the maze for some settings and a fresh game on it (the seed makes it repeatable)."""
     graph, start, goal = build_maze(settings)
-    optimal = bfs(graph, start, goal).path or [start]
-    session = GameSession(
-        id=secrets.token_urlsafe(9),
+    return GameSession(
         graph=graph,
         start=start,
         goal=goal,
         controller=PlayerController(graph, start, goal),
-        optimal_path=optimal,
+        optimal_path=bfs(graph, start, goal).path or [start],
         settings=settings,
     )
-    store.add(session)
+
+
+def create_game(store: TokenStore, body: dict[str, Any]) -> dict[str, Any]:
+    """POST /api/games: generate a maze and start a game on it."""
+    session = new_session(parse_settings(body))
+    graph, start, goal = session.graph, session.start, session.goal
     return {
-        "id": session.id,
-        "settings": settings,
+        "id": store.save(session),
+        "settings": session.settings,
         "maze": maze_to_json(graph, start, goal),
-        "optimal_moves": len(optimal) - 1,
+        "optimal_moves": len(session.optimal_path) - 1,
         "analysis": analyse(graph, start, goal),
         "player": _player_json(session),
     }
 
 
-def move(store: GameStore, game_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def move(store: TokenStore, game_id: str, body: dict[str, Any]) -> dict[str, Any]:
     """POST /api/games/<id>/move: try one step; walls and the outer edge block it.
 
     Concept: Graph Theory: the player may only traverse edges of G.
@@ -297,15 +337,20 @@ def move(store: GameStore, game_id: str, body: dict[str, Any]) -> dict[str, Any]
     session = store.get(game_id)
     direction = _choice(body.get("direction"), "direction", ("up", "down", "left", "right"))
     if session.finished_at is not None:
-        return {"moved": False, "player": _player_json(session)}
+        return {"id": game_id, "moved": False, "player": _player_json(session)}
+    if len(session.moves) >= MAX_MOVES:
+        raise ApiError("too many moves; start a new maze")
     moved = session.controller.try_move(direction)
-    if moved and session.first_move_at is None:
-        session.first_move_at = time.perf_counter()
+    if moved:
+        session.moves.append(direction)
+        if session.first_move_at is None:
+            session.first_move_at = time.time()
     response: dict[str, Any] = {"moved": moved}
     if moved and session.controller.has_reached_goal():
-        session.finished_at = time.perf_counter()
+        session.finished_at = time.time()
         response["result"] = result_json(session)
     response["player"] = _player_json(session)
+    response["id"] = store.save(session)
     return response
 
 
@@ -326,35 +371,38 @@ def result_json(session: GameSession) -> dict[str, Any]:
     }
 
 
-def hint(store: GameStore, game_id: str) -> dict[str, Any]:
+def hint(store: TokenStore, game_id: str) -> dict[str, Any]:
     """POST /api/games/<id>/hint: next cell on the BFS path from the player to the goal."""
     session = store.get(game_id)
     if session.finished_at is not None:
-        return {"hint": None, "player": _player_json(session)}
+        return {"id": game_id, "hint": None, "player": _player_json(session)}
     path = bfs(session.graph, session.controller.state.current, session.goal).path
     cell = session.controller.request_hint(path) if path else None
-    return {"hint": list(cell) if cell else None, "player": _player_json(session)}
+    return {"id": store.save(session), "hint": list(cell) if cell else None, "player": _player_json(session)}
 
 
-def restart(store: GameStore, game_id: str) -> dict[str, Any]:
+def restart(store: TokenStore, game_id: str) -> dict[str, Any]:
     """POST /api/games/<id>/restart: same maze, player back on the start cell."""
     session = store.get(game_id)
     session.controller.reset()
+    session.moves = []
     session.first_move_at = None
     session.finished_at = None
     session.solution_revealed = False
-    return {"player": _player_json(session)}
+    return {"id": store.save(session), "player": _player_json(session)}
 
 
-def solve(store: GameStore, game_id: str, algorithm: str) -> dict[str, Any]:
+def solve(store: TokenStore, game_id: str, algorithm: str) -> dict[str, Any]:
     """GET /api/games/<id>/solve?algorithm=: run one solver from start to goal."""
     session = store.get(game_id)
     name = _choice(algorithm, "algorithm", tuple(SOLVERS))
     session.solution_revealed = True
-    return search_to_json(name, SOLVERS[name](session.graph, session.start, session.goal))
+    response = search_to_json(name, SOLVERS[name](session.graph, session.start, session.goal))
+    response["id"] = store.save(session)
+    return response
 
 
-def compare(store: GameStore, game_id: str) -> dict[str, Any]:
+def compare(store: TokenStore, game_id: str) -> dict[str, Any]:
     """GET /api/games/<id>/compare: BFS, DFS and A* on the same maze, plus a verdict."""
     session = store.get(game_id)
     results = compare_algorithms(session.graph, session.start, session.goal)

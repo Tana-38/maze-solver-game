@@ -257,6 +257,7 @@
   const settings = { difficulty: "easy", algorithm: "dfs", mode: "corners" };
   const game = {
     id: null,
+    gen: 0,
     maze: null,
     pos: null,
     optimal: 0,
@@ -334,7 +335,8 @@
       return;
     }
     closeModal(true);
-    game.id = data.id;
+    game.id = data.id;     // a signed token; every response that changes the game sends a new one
+    game.gen += 1;         // tells stale responses from an older maze to stand down
     game.maze = data.maze;
     game.pos = data.maze.start.slice();
     game.optimal = data.optimal_moves;
@@ -383,12 +385,13 @@
     gsap.to(board.player, { x: game.pos[1], y: game.pos[0], duration: 0.12, ease: "power2.out", overwrite: true });
     updateRemaining();
 
-    const id = game.id;
+    const gen = game.gen;
     game.queue = game.queue.then(async () => {
-      if (id !== game.id) return;
+      if (gen !== game.gen) return;
       try {
-        const res = await api(`/api/games/${id}/move`, { method: "POST", body: { direction: dir } });
-        if (id !== game.id) return;
+        const res = await api(`/api/games/${game.id}/move`, { method: "POST", body: { direction: dir } });
+        if (gen !== game.gen) return;
+        game.id = res.id;
         updatePlayerStats(res.player);
         if (!res.moved && !res.player.finished) {
           const [sr, sc] = res.player.current;  // resync if the server disagreed
@@ -419,8 +422,11 @@
   async function hint() {
     if (!game.id || game.finished || game.locked) return;
     await game.queue;
+    const gen = game.gen;
     try {
       const res = await api(`/api/games/${game.id}/hint`, { method: "POST" });
+      if (gen !== game.gen) return;
+      game.id = res.id;
       board.hint = res.hint;
       updatePlayerStats(res.player);
       if (res.hint) toast("Hint costs 0.05 of your score");
@@ -429,8 +435,12 @@
 
   async function solve() {
     if (!game.id || game.locked) return;
+    await game.queue;
+    const gen = game.gen;
     try {
       const res = await api(`/api/games/${game.id}/solve?algorithm=bfs`);
+      if (gen !== game.gen) return;
+      game.id = res.id;
       game.locked = true;
       board.explored = res.explored_order;
       board.exploredIndex = 0;
@@ -449,6 +459,7 @@
     await game.queue;
     try {
       const res = await api(`/api/games/${game.id}/restart`, { method: "POST" });
+      game.id = res.id;
       closeModal(true);
       game.pos = res.player.current;
       game.finished = false;
@@ -472,19 +483,21 @@
   $("#restart-btn").addEventListener("click", restart);
   $$(".dpad__btn").forEach((b) => b.addEventListener("click", () => move(b.dataset.dir)));
 
-  // Keyboard is active while the board is on screen.
-  let playInView = false;
+  // Keys drive the game only while the board is visible, so they still scroll the page elsewhere.
+  function boardOnScreen() {
+    const r = boardFrame.getBoundingClientRect();
+    return r.bottom > window.innerHeight * 0.15 && r.top < window.innerHeight * 0.85;
+  }
   ScrollTrigger.create({
     trigger: "#board-frame", start: "top 85%", end: "bottom 15%",
     onToggle: (self) => {
-      playInView = self.isActive;
       boardFrame.classList.toggle("is-focused", self.isActive);
     },
   });
   const KEYS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
   window.addEventListener("keydown", (e) => {
     const typing = e.target instanceof Element && e.target.closest("input, textarea");
-    if (!playInView || typing || !$("#result-modal").hidden) return;
+    if (!boardOnScreen() || typing || !$("#result-modal").hidden) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const dir = KEYS[e.key];
     const key = e.key.toLowerCase();
@@ -521,7 +534,9 @@
     $("#r-backtracks").textContent = r.backtracks;
     $("#r-note").textContent = r.solution_revealed
       ? "You looked at the solution before finishing."
-      : r.score === 1 ? "You walked a shortest path." : `${r.player_moves - r.optimal_moves} moves more than the shortest path.`;
+      : r.player_moves === r.optimal_moves
+        ? (r.score === 1 ? "You walked a shortest path." : "A shortest path, but hints and backtracks cost points.")
+        : `${r.player_moves - r.optimal_moves} moves more than the shortest path.`;
     modal.hidden = false;
     if (lenis) lenis.stop();
     const score = { v: 0 };

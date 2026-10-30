@@ -3,7 +3,9 @@
 Owner: Role 4: Game Logic & Integration.
 
 Serves the frontend in web/static and the JSON API in web/api.py.
-Run from the project root, then open http://127.0.0.1:8000 :
+On Vercel the same Handler runs as a serverless function (api/index.py) and
+Vercel serves web/static itself. Run locally from the project root, then open
+http://127.0.0.1:8000 :
 
     python web/server.py
     python web/server.py --port 8080 --open
@@ -16,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import re
 import sys
 import webbrowser
@@ -32,9 +35,9 @@ from web import api  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_BODY = 16 * 1024
-GAME_ROUTE = re.compile(r"^/api/games/([A-Za-z0-9_-]+)/(move|hint|restart|solve|compare)$")
+GAME_ROUTE = re.compile(r"^/api/games/([A-Za-z0-9_.-]+)/(move|hint|restart|solve|compare)$")
 
-STORE = api.GameStore()
+STORE = api.TokenStore(os.environ.get("MAZE_SECRET"))
 
 
 class Handler(BaseHTTPRequestHandler):
